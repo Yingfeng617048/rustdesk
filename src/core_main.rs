@@ -384,6 +384,16 @@ pub fn core_main() -> Option<Vec<String>> {
                 crate::tray::start_tray();
             }
             return None;
+        } else if args[0] == "--cashier-enroll" {
+            let Some(enrollment_token) = args.get(1) else {
+                eprintln!("请在命令后填写安装码");
+                return None;
+            };
+            match crate::cashier_remote::enroll(enrollment_token) {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
         } else if args[0] == "--install-service" {
             log::info!("start --install-service");
             crate::platform::install_service();

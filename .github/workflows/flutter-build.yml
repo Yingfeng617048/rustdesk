@@ -9,6 +9,9 @@ on:
       upload-tag:
         type: string
         default: "nightly"
+      cashier_api_base_url:
+        type: string
+        default: ""
 
 # NOTE: F-Droid builder script 'flutter/build_fdroid.sh' reads environment
 # variables from this workflow!
@@ -51,6 +54,7 @@ env:
   MACOS_P12_BASE64: "${{ secrets.MACOS_P12_BASE64 }}"
   UPLOAD_ARTIFACT: "${{ inputs.upload-artifact }}"
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}-2"
+  CASHIER_API_BASE_URL: "${{ inputs.cashier_api_base_url || vars.CASHIER_API_BASE_URL }}"
 
 jobs:
   generate-bridge:

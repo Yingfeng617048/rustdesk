@@ -444,7 +444,13 @@ def build_flutter_windows(version, features, skip_portable_pack):
             print("cargo build failed, please check rust source code.")
             exit(-1)
     os.chdir('flutter')
-    system2('flutter build windows --release')
+    flutter_build_command = 'flutter build windows --release'
+    cashier_api_base_url = os.environ.get('CASHIER_API_BASE_URL', '').strip()
+    if cashier_api_base_url:
+        flutter_build_command += (
+            f' --dart-define=CASHIER_API_BASE_URL={cashier_api_base_url}'
+        )
+    system2(flutter_build_command)
     os.chdir('..')
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)

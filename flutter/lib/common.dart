@@ -49,6 +49,9 @@ import 'package:flutter_hbb/utils/http_service.dart' as http;
 
 final globalKey = GlobalKey<NavigatorState>();
 final navigationBarKey = GlobalKey();
+const _cashierRemoteScheme = 'cashier-remote';
+const _cashierApiBaseUrl = String.fromEnvironment('CASHIER_API_BASE_URL',
+    defaultValue: 'http://localhost:3000');
 
 final isAndroid = isAndroid_;
 final isIOS = isIOS_;
@@ -2204,7 +2207,11 @@ Future<bool> initUniLinks() async {
   // check cold boot
   try {
     final initialLink = await getInitialLink();
-    print("initialLink: $initialLink");
+    if (initialLink?.startsWith('$_cashierRemoteScheme://') == true) {
+      debugPrint('A cashier remote initial link was received.');
+    } else {
+      print("initialLink: $initialLink");
+    }
     if (initialLink == null || initialLink.isEmpty) {
       return false;
     }
@@ -2231,7 +2238,12 @@ StreamSubscription? listenUniLinks({handleByFlutter = true}) {
   }
 
   final sub = uriLinkStream.listen((Uri? uri) {
-    debugPrint("A uri was received: $uri. handleByFlutter $handleByFlutter");
+    if (uri?.scheme == _cashierRemoteScheme) {
+      debugPrint(
+          "A cashier remote uri was received. handleByFlutter $handleByFlutter");
+    } else {
+      debugPrint("A uri was received: $uri. handleByFlutter $handleByFlutter");
+    }
     if (uri != null) {
       if (handleByFlutter) {
         handleUriLink(uri: uri);
@@ -2260,8 +2272,84 @@ setEnvTerminalAdmin() {
   bind.mainSetEnv(key: 'IS_TERMINAL_ADMIN', value: 'Y');
 }
 
+Future<void> _handleCashierRemoteUri(Uri uri) async {
+  final token = uri.queryParameters['token'];
+  if (uri.scheme != _cashierRemoteScheme ||
+      uri.authority != 'connect' ||
+      token == null ||
+      token.isEmpty) {
+    showToast('远程连接地址无效');
+    return;
+  }
+
+  try {
+    final apiBaseUrl = _cashierApiBaseUrl.replaceFirst(RegExp(r'/$'), '');
+    final apiUri = Uri.tryParse(apiBaseUrl);
+    final isLocalHttp = apiUri?.scheme == 'http' &&
+        const {'localhost', '127.0.0.1', '::1'}.contains(apiUri?.host);
+    if (apiUri == null || (apiUri.scheme != 'https' && !isLocalHttp)) {
+      showToast('管理后台必须使用 HTTPS 安全网址');
+      return;
+    }
+    final response = await http
+        .post(
+          Uri.parse('$apiBaseUrl/remote/client/sessions/resolve'),
+          headers: {'Content-Type': 'application/json'},
+          body: jsonEncode({'sessionToken': token}),
+        )
+        .timeout(const Duration(seconds: 10));
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      showToast('远程连接票据无效或已过期');
+      return;
+    }
+
+    final body = jsonDecode(response.body);
+    final session = body is Map<String, dynamic> ? body['session'] : null;
+    final rustdeskId =
+        session is Map<String, dynamic> ? session['rustdeskId'] : null;
+    final accessKey =
+        session is Map<String, dynamic> ? session['accessKey'] : null;
+    if (rustdeskId is! String ||
+        rustdeskId.isEmpty ||
+        accessKey is! String ||
+        accessKey.isEmpty) {
+      showToast('远程连接信息不完整');
+      return;
+    }
+
+    await rustDeskWinManager.newRemoteDesktop(
+      rustdeskId,
+      password: accessKey,
+    );
+  } catch (_) {
+    showToast('无法连接管理后台，请检查网络');
+  }
+}
+
 // uri link handler
 bool handleUriLink({List<String>? cmdArgs, Uri? uri, String? uriString}) {
+  Uri? cashierRemoteUri;
+  if (uri?.scheme == _cashierRemoteScheme) {
+    cashierRemoteUri = uri;
+  } else if (uriString != null) {
+    final parsed = Uri.tryParse(uriString);
+    if (parsed?.scheme == _cashierRemoteScheme) {
+      cashierRemoteUri = parsed;
+    }
+  } else if (cmdArgs != null) {
+    for (final arg in cmdArgs) {
+      final parsed = Uri.tryParse(arg);
+      if (parsed?.scheme == _cashierRemoteScheme) {
+        cashierRemoteUri = parsed;
+        break;
+      }
+    }
+  }
+  if (cashierRemoteUri != null) {
+    Future.delayed(Duration.zero, () => _handleCashierRemoteUri(cashierRemoteUri!));
+    return true;
+  }
+
   List<String>? args;
   if (cmdArgs != null && cmdArgs.isNotEmpty) {
     args = cmdArgs;

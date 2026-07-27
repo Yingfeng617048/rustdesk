@@ -389,6 +389,8 @@ pub struct Connection {
     tx_post_seq: mpsc::UnboundedSender<(String, Value)>,
     conn_audit_primary_auth: ConnAuditPrimaryAuth,
     conn_audit_two_factor: ConnAuditTwoFactor,
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    cashier_remote_session_id: Option<i32>,
     // Tracks read job IDs delegated to CM process.
     // When a read job is delegated to CM (via FS::ReadFile), the job id is added here.
     // Used to filter stale responses (FileBlockFromCM, FileReadDone, etc.) for
@@ -593,6 +595,8 @@ impl Connection {
             terminal_generic_service: None,
             conn_audit_primary_auth: ConnAuditPrimaryAuth::None,
             conn_audit_two_factor: ConnAuditTwoFactor::None,
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            cashier_remote_session_id: None,
         };
         let addr = hbb_common::try_into_v4(addr);
         if !conn.on_open(addr).await {
@@ -1618,7 +1622,15 @@ impl Connection {
         if self.authorized {
             return true;
         }
-        if self.require_2fa.is_some() && !self.is_recent_session(true) && !self.from_switch {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let cashier_remote_authorized = self.cashier_remote_session_id.is_some();
+        #[cfg(any(target_os = "android", target_os = "ios"))]
+        let cashier_remote_authorized = false;
+        if !cashier_remote_authorized
+            && self.require_2fa.is_some()
+            && !self.is_recent_session(true)
+            && !self.from_switch
+        {
             self.require_2fa.as_ref().map(|totp| {
                 let bot = crate::auth_2fa::TelegramBot::get();
                 let bot = match bot {
@@ -1657,6 +1669,10 @@ impl Connection {
             return false;
         }
         self.authorized = true;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(session_id) = self.cashier_remote_session_id {
+            crate::cashier_remote::report_connected(session_id);
+        }
         let (conn_type, auth_conn_type) = if self.file_transfer.is_some() {
             (1, AuthConnType::FileTransfer)
         } else if self.port_forward_socket.is_some() {
@@ -2298,6 +2314,14 @@ impl Connection {
     }
 
     fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if let Some(session_id) = self.cashier_remote_session_id {
+            if crate::cashier_remote::consume_access_key(session_id) {
+                self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::TemporaryPassword);
+                return true;
+            }
+            self.cashier_remote_session_id = None;
+        }
         if password::temporary_enabled() {
             let password = password::temporary_password();
             if self.validate_password_plain(&password) {
@@ -2676,9 +2700,28 @@ impl Connection {
             let allow_logon_screen_password =
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let cashier_remote_session_id = if lr.union.is_none() {
+                crate::cashier_remote::validate_access_key(|access_key| {
+                    self.validate_password_plain(access_key)
+                })
+            } else {
+                None
+            };
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                self.cashier_remote_session_id = cashier_remote_session_id;
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let has_cashier_remote_session = cashier_remote_session_id.is_some();
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            let has_cashier_remote_session = false;
 
-            if (password::approve_mode() == ApproveMode::Click && !allow_logon_screen_password)
-                || password::approve_mode() == ApproveMode::Both && !password::has_valid_password()
+            if !has_cashier_remote_session
+                && ((password::approve_mode() == ApproveMode::Click
+                    && !allow_logon_screen_password)
+                    || password::approve_mode() == ApproveMode::Both
+                        && !password::has_valid_password())
             {
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 if should_use_terminal_os_login_scope(self.terminal, &lr.os_login.username) {
@@ -2695,7 +2738,7 @@ impl Connection {
                         .await;
                 }
                 return true;
-            } else if self.is_recent_session(false) {
+            } else if !has_cashier_remote_session && self.is_recent_session(false) {
                 if err_msg.is_empty() {
                     #[cfg(target_os = "linux")]
                     self.linux_headless_handle.wait_desktop_cm_ready().await;
@@ -4852,6 +4895,12 @@ impl Connection {
             return;
         }
         self.closed = true;
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        if self.authorized {
+            if let Some(session_id) = self.cashier_remote_session_id.take() {
+                crate::cashier_remote::report_ended(session_id);
+            }
+        }
         // If voice A,B -> C, and A,B has voice call
         // B disconnects, C will reset the voice call input.
         //
