@@ -13,6 +13,7 @@ use std::{
 const API_BASE_URL_OPTION: &str = "cashier-api-base-url";
 const DEVICE_ID_OPTION: &str = "cashier-device-id";
 const DEVICE_SECRET_OPTION: &str = "cashier-device-secret";
+const DEVICE_UUID_OPTION: &str = "cashier-device-uuid";
 const SECRET_ENCRYPTION_VERSION: &str = "00";
 const SECRET_MAX_LEN: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
@@ -54,6 +55,10 @@ struct RegisterResponse {
     device: RegisteredDevice,
     device_secret: String,
     rustdesk_server: RustdeskServer,
+    /// 后台分配的设备名（如“春熙路店1号机”）
+    name: Option<String>,
+    /// 门店名称
+    store_name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -123,7 +128,15 @@ fn operating_system() -> String {
 }
 
 fn device_uuid() -> String {
-    crate::encode64(hbb_common::get_uuid())
+    // 持久化设备唯一编号：重装/重新登记时复用同一编号，
+    // 后台会更新原设备记录而不是新建（重装不重号）。
+    let saved = Config::get_option(DEVICE_UUID_OPTION);
+    if !saved.is_empty() {
+        return saved;
+    }
+    let uuid = crate::encode64(hbb_common::get_uuid());
+    Config::set_option(DEVICE_UUID_OPTION.to_owned(), uuid.clone());
+    uuid
 }
 
 fn credentials() -> Option<DeviceCredential> {
@@ -205,9 +218,18 @@ pub fn enroll(enrollment_token: &str) -> Result<String, String> {
 
     save_registration(response.device.id, encrypted, &response.rustdesk_server)?;
 
+    let assigned_name = response
+        .name
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| response.store_name.filter(|value| !value.trim().is_empty()));
+    let suffix = assigned_name
+        .map(|value| format!("，设备：{}", value.trim()))
+        .unwrap_or_default();
+
     Ok(format!(
-        "设备登记成功，RustDesk ID：{}",
-        Config::get_id()
+        "设备登记成功，RustDesk ID：{}{}",
+        Config::get_id(),
+        suffix
     ))
 }
 
