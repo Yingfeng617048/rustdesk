@@ -90,6 +90,19 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         alignment: Alignment.center,
         child: loadLogo(),
       ),
+      Padding(
+        padding: const EdgeInsets.only(top: 6, bottom: 2),
+        child: Align(
+          alignment: Alignment.center,
+          child: Text(
+            '果次方远程助手',
+            style: Theme.of(context)
+                .textTheme
+                .titleLarge
+                ?.copyWith(fontWeight: FontWeight.bold),
+          ),
+        ),
+      ),
       buildTip(context),
       if (!isOutgoingOnly) buildIDBoard(context),
       if (!isOutgoingOnly) buildPasswordBoard(context),

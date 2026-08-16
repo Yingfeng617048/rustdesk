@@ -3124,22 +3124,23 @@ int versionCmp(String v1, String v2) {
 }
 
 String getWindowName({WindowType? overrideType}) {
-  final name = bind.mainGetAppNameSync();
+  // 品牌化：对外统一显示“果次方远程助手”（内部程序名仍为 RustDesk，配置目录不变）
+  const brandName = '果次方远程助手';
   switch (overrideType ?? kWindowType) {
     case WindowType.Main:
-      return name;
+      return brandName;
     case WindowType.FileTransfer:
-      return "File Transfer - $name";
+      return "File Transfer - $brandName";
     case WindowType.ViewCamera:
-      return "View Camera - $name";
+      return "View Camera - $brandName";
     case WindowType.PortForward:
-      return "Port Forward - $name";
+      return "Port Forward - $brandName";
     case WindowType.RemoteDesktop:
-      return "Remote Desktop - $name";
+      return "Remote Desktop - $brandName";
     default:
       break;
   }
-  return name;
+  return brandName;
 }
 
 String getWindowNameWithId(String id, {WindowType? overrideType}) {
