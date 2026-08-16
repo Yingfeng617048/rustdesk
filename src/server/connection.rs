@@ -2556,6 +2556,8 @@ impl Connection {
                 return true;
             }
             self.reset_session_scope_for_login();
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let has_login_union = lr.union.is_some();
             match lr.union {
                 Some(login_request::Union::FileTransfer(ft)) => {
                     if !Self::permission(
@@ -2701,7 +2703,7 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            let cashier_remote_session_id = if lr.union.is_none() {
+            let cashier_remote_session_id = if !has_login_union {
                 crate::cashier_remote::validate_access_key(|access_key| {
                     self.validate_password_plain(access_key)
                 })
