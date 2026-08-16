@@ -16,7 +16,7 @@ const DEVICE_SECRET_OPTION: &str = "cashier-device-secret";
 const SECRET_ENCRYPTION_VERSION: &str = "00";
 const SECRET_MAX_LEN: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
-const SESSION_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 struct DeviceCredential {
@@ -339,6 +339,19 @@ pub fn start_host_agent() {
             }
         });
     });
+}
+
+/// Refresh the active session from the backend right before a login attempt,
+/// so the very first connection after a disconnect is not rejected due to the
+/// 1s polling gap.
+pub async fn refresh_active_session() {
+    let Some(credential) = credentials() else {
+        return;
+    };
+    let Ok(client) = async_http_client() else {
+        return;
+    };
+    let _ = poll_active_session(&client, &credential).await;
 }
 
 pub fn validate_access_key<F>(matches: F) -> Option<i32>

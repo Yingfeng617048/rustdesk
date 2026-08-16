@@ -2551,6 +2551,11 @@ impl Connection {
         }
         // After handling CloseReason messages, proceed to process other message types
         if let Some(message::Union::LoginRequest(lr)) = msg.union {
+            // Refresh the cashier remote session from the backend before validating,
+            // so a connection right after a previous disconnect is never rejected
+            // because the 1s polling loop has not seen the new session yet.
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            crate::cashier_remote::refresh_active_session().await;
             self.handle_login_request_without_validation(&lr).await;
             if self.authorized {
                 return true;
