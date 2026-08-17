@@ -389,7 +389,8 @@ pub fn core_main() -> Option<Vec<String>> {
                 eprintln!("请在命令后填写安装码");
                 return None;
             };
-            match crate::cashier_remote::enroll(enrollment_token) {
+            let device_name = args.get(2).map(|value| value.as_str()).unwrap_or("");
+            match crate::cashier_remote::enroll(enrollment_token, device_name) {
                 Ok(message) => println!("{message}"),
                 Err(err) => eprintln!("{err}"),
             }

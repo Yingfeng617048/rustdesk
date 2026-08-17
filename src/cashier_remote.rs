@@ -175,17 +175,24 @@ fn save_registration(
     crate::ipc::set_options(options).map_err(|err| format!("无法保存设备登记信息：{err}"))
 }
 
-pub fn enroll(enrollment_token: &str) -> Result<String, String> {
+pub fn enroll(enrollment_token: &str, device_name: &str) -> Result<String, String> {
     let enrollment_token = enrollment_token.trim();
     if enrollment_token.is_empty() {
         return Err("安装码不能为空".to_owned());
     }
 
+    // 绑定人员填写的设备名优先，未填则用计算机名
+    let name = if device_name.trim().is_empty() {
+        hostname()
+    } else {
+        device_name.trim().to_owned()
+    };
+
     let request = RegisterRequest {
         enrollment_token: enrollment_token.to_owned(),
         device_uuid: device_uuid(),
         rustdesk_id: Config::get_id(),
-        name: hostname(),
+        name: name.clone(),
         hostname: hostname(),
         operating_system: operating_system(),
         client_version: crate::VERSION.to_owned(),
