@@ -2465,11 +2465,18 @@ pub fn main_support_remove_wallpaper() -> bool {
 }
 
 pub fn is_incoming_only() -> SyncReturn<bool> {
-    SyncReturn(config::is_incoming_only())
+    SyncReturn(
+        config::is_incoming_only()
+            // 果次方定制：允许通过普通配置选项设置（助手登记后写入 conn-type=incoming）
+            || config::Config::get_option("conn-type") == "incoming",
+    )
 }
 
 pub fn is_outgoing_only() -> SyncReturn<bool> {
-    SyncReturn(config::is_outgoing_only())
+    SyncReturn(
+        config::is_outgoing_only()
+            || config::Config::get_option("conn-type") == "outgoing",
+    )
 }
 
 pub fn is_custom_client() -> SyncReturn<bool> {

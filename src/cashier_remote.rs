@@ -233,6 +233,43 @@ pub fn enroll(enrollment_token: &str) -> Result<String, String> {
     ))
 }
 
+/// 打印本机在后台登记的设备名和门店名（助手轮询门店名用）。
+pub fn print_device_name() -> Result<String, String> {
+    let Some(credential) = credentials() else {
+        return Err("本机尚未登记".to_owned());
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let response = client
+        .get(format!("{}/remote/client/me", api_base_url()?))
+        .header("x-remote-device-id", credential.id.to_string())
+        .header("x-remote-device-secret", &credential.secret)
+        .send()
+        .map_err(|err| format!("无法连接管理后台：{err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("后台返回状态码 {}", response.status()));
+    }
+    let json: serde_json::Value = response
+        .json()
+        .map_err(|err| format!("无法读取后台返回结果：{err}"))?;
+    let device_name = json["device"]["name"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let store_name = json["store"]["name"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    if device_name.is_empty() && store_name.is_empty() {
+        return Err("后台没有该设备的信息".to_owned());
+    }
+    Ok(format!("设备：{}，门店：{}", device_name, store_name))
+}
+
 fn authenticated_request(
     client: &reqwest::Client,
     method: reqwest::Method,

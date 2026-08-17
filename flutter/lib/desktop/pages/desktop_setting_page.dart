@@ -2437,6 +2437,10 @@ class _AboutState extends State<_About> {
               const SizedBox(
                 height: 8.0,
               ),
+              const Text(
+                '果次方商服云 · 定制版（收银台远程协助）',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
               SelectionArea(
                   child: Text('${translate('Version')}: $version')
                       .marginSymmetric(vertical: 4.0)),
