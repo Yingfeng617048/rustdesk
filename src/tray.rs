@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub fn start_tray() {
-    if crate::ui_interface::get_builtin_option(hbb_common::config::keys::OPTION_HIDE_TRAY) == "Y" {
+    if crate::ui_interface::get_builtin_option(hbb_common::config::keys::OPTION_HIDE_TRAY) == "Y"
+        || crate::cashier_remote::is_cashier_build()
+    {
+        // 果次方定制客户端不创建 rustdesk 托盘（助手有自己的托盘）
         #[cfg(not(target_os = "macos"))]
         {
             return;

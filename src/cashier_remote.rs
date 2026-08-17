@@ -326,6 +326,11 @@ async fn poll_active_session(
     Ok(())
 }
 
+/// 是否为果次方定制构建（编译期内置了管理后台地址）。
+pub fn is_cashier_build() -> bool {
+    option_env!("CASHIER_API_BASE_URL").is_some()
+}
+
 pub fn start_host_agent() {
     static START: Once = Once::new();
     START.call_once(|| {
