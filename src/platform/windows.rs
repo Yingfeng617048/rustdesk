@@ -3218,7 +3218,7 @@ taskkill /F /IM {app_name}.exe{filter}
         log::debug!("{err}");
         return true;
     }
-    run_after_run_cmds(false);
+    // 收银机静默服务场景：装完服务不弹窗口、不挂托盘（官方流程会 run_after_run_cmds 拉起 GUI）
     std::process::exit(0);
 }
 
