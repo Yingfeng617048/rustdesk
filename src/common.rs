@@ -2081,9 +2081,8 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
-    // 品牌化：内部程序名统一为“果次方远程助手”
-    // （配置目录随之变为 %APPDATA%\果次方远程助手，测试阶段可接受重新绑定）
-    *config::APP_NAME.write().unwrap() = "果次方远程助手".to_owned();
+    // 内部程序名保持 RustDesk（配置目录、服务名、安装脚本都依赖 ASCII 程序名；
+    // 品牌展示由 flutter 界面层完成：窗口标题/首页/图标）
     #[cfg(debug_assertions)]
     if let Ok(data) = std::fs::read_to_string("./custom.txt") {
         read_custom_client(data.trim());
