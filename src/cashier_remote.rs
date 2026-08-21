@@ -208,7 +208,6 @@ pub fn enroll(enrollment_token: &str, device_name: &str) -> Result<String, Strin
         hostname: hostname(),
         operating_system: operating_system(),
         client_version: crate::VERSION.to_owned(),
-        engine_instance_id: ENGINE_INSTANCE_ID.clone(),
     };
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -318,6 +317,7 @@ async fn heartbeat(
         hostname: hostname(),
         operating_system: operating_system(),
         client_version: crate::VERSION.to_owned(),
+        engine_instance_id: ENGINE_INSTANCE_ID.clone(),
     };
     let response = authenticated_request(
         client,
