@@ -10,6 +10,13 @@ on:
         description: "Your cashier management API URL, for example https://api.example.com"
         required: true
         type: string
+  push:
+    branches:
+      - codex/cashier-remote-integration
+    paths:
+      - "src/cashier_remote.rs"
+      - "src/core_main.rs"
+      - ".github/workflows/flutter-nightly.yml"
 
 jobs:
   run-flutter-nightly-build:
@@ -18,4 +25,4 @@ jobs:
     with:
       upload-artifact: true
       upload-tag: "nightly"
-      cashier_api_base_url: ${{ inputs.cashier_api_base_url }}
+      cashier_api_base_url: ${{ inputs.cashier_api_base_url || 'https://guocifang.cn/api' }}
