@@ -401,6 +401,22 @@ pub fn core_main() -> Option<Vec<String>> {
                 Err(err) => eprintln!("{err}"),
             }
             return None;
+        } else if args[0] == "--cashier-session-notice" {
+            match crate::cashier_remote::print_session_notice() {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
+        } else if args[0] == "--cashier-end-session" {
+            let Some(session_id) = args.get(1).and_then(|value| value.parse::<i32>().ok()) else {
+                eprintln!("远程会话编号无效");
+                return None;
+            };
+            match crate::cashier_remote::end_session_from_assistant(session_id) {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
         } else if args[0] == "--install-service" {
             log::info!("start --install-service");
             crate::platform::install_service();

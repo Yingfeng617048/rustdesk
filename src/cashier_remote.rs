@@ -18,6 +18,7 @@ const SECRET_ENCRYPTION_VERSION: &str = "00";
 const SECRET_MAX_LEN: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+const SESSION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
 struct DeviceCredential {
@@ -36,6 +37,7 @@ struct ActiveSession {
 lazy_static::lazy_static! {
     static ref ACTIVE_SESSION: Mutex<Option<ActiveSession>> = Mutex::new(None);
     static ref CONSUMED_SESSION_ID: Mutex<Option<i32>> = Mutex::new(None);
+    static ref ENGINE_INSTANCE_ID: String = uuid::Uuid::new_v4().simple().to_string();
 }
 
 #[derive(Serialize)]
@@ -83,6 +85,13 @@ struct HeartbeatRequest {
     hostname: String,
     operating_system: String,
     client_version: String,
+    engine_instance_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionInstanceRequest {
+    engine_instance_id: String,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +208,7 @@ pub fn enroll(enrollment_token: &str, device_name: &str) -> Result<String, Strin
         hostname: hostname(),
         operating_system: operating_system(),
         client_version: crate::VERSION.to_owned(),
+        engine_instance_id: ENGINE_INSTANCE_ID.clone(),
     };
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -325,6 +335,57 @@ async fn heartbeat(
     Ok(())
 }
 
+/// Query the authenticated, heartbeat-validated session notice without
+/// exposing the device secret to the desktop assistant process.
+pub fn print_session_notice() -> Result<String, String> {
+    let Some(credential) = credentials() else {
+        return Err("本机尚未登记".to_owned());
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let response = client
+        .get(format!("{}/remote/client/sessions/notice", api_base_url()?))
+        .header("x-remote-device-id", credential.id.to_string())
+        .header("x-remote-device-secret", &credential.secret)
+        .send()
+        .map_err(|err| format!("无法连接管理后台：{err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("后台返回状态码 {}", response.status()));
+    }
+    response.text().map_err(|err| format!("无法读取后台返回结果：{err}"))
+}
+
+/// End a session through the authenticated engine credential. The assistant
+/// invokes this command and never reads or stores the device secret itself.
+pub fn end_session_from_assistant(session_id: i32) -> Result<String, String> {
+    let Some(credential) = credentials() else {
+        return Err("本机尚未登记".to_owned());
+    };
+    if session_id <= 0 {
+        return Err("远程会话编号无效".to_owned());
+    }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| err.to_string())?;
+    let response = client
+        .post(format!(
+            "{}/remote/client/sessions/{session_id}/end",
+            api_base_url()?
+        ))
+        .header("x-remote-device-id", credential.id.to_string())
+        .header("x-remote-device-secret", &credential.secret)
+        .json(&serde_json::json!({ "reason": "customer_disconnect" }))
+        .send()
+        .map_err(|err| format!("无法连接管理后台：{err}"))?;
+    if !response.status().is_success() {
+        return Err(format!("后台返回状态码 {}", response.status()));
+    }
+    Ok("远程会话已结束".to_owned())
+}
+
 async fn poll_active_session(
     client: &reqwest::Client,
     credential: &DeviceCredential,
@@ -398,6 +459,8 @@ pub fn start_host_agent() {
             };
             let mut heartbeat_timer = tokio::time::interval(HEARTBEAT_INTERVAL);
             let mut poll_timer = tokio::time::interval(SESSION_POLL_INTERVAL);
+            let mut session_heartbeat_timer =
+                tokio::time::interval(SESSION_HEARTBEAT_INTERVAL);
             loop {
                 tokio::select! {
                     _ = heartbeat_timer.tick() => {
@@ -414,6 +477,14 @@ pub fn start_host_agent() {
                         };
                         if let Err(err) = poll_active_session(&client, &credential).await {
                             log::warn!("Cashier remote session poll failed: {err}");
+                        }
+                    }
+                    _ = session_heartbeat_timer.tick() => {
+                        let session_id = *CONSUMED_SESSION_ID.lock().unwrap();
+                        if let Some(session_id) = session_id {
+                            if let Err(err) = send_session_status(session_id, "heartbeat").await {
+                                log::warn!("Cashier remote session heartbeat failed: {err}");
+                            }
                         }
                     }
                 }
@@ -490,42 +561,34 @@ pub fn clear_session(session_id: i32) {
     }
 }
 
+async fn send_session_status(session_id: i32, action: &str) -> Result<(), String> {
+    let Some(credential) = credentials() else {
+        return Err("device credential is missing".to_owned());
+    };
+    let client = async_http_client()?;
+    let path = format!("/remote/client/sessions/{session_id}/{action}");
+    let response = authenticated_request(
+        &client,
+        reqwest::Method::POST,
+        &path,
+        &credential,
+    )?
+    .json(&SessionInstanceRequest {
+        engine_instance_id: ENGINE_INSTANCE_ID.clone(),
+    })
+    .send()
+    .await
+    .map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("session {action} returned {}", response.status()));
+    }
+    Ok(())
+}
+
 fn report_session_status(session_id: i32, action: &'static str) {
     tokio::spawn(async move {
-        let Some(credential) = credentials() else {
-            return;
-        };
-        let client = match async_http_client() {
-            Ok(client) => client,
-            Err(err) => {
-                log::warn!("Failed to create cashier remote status client: {err}");
-                return;
-            }
-        };
-        let path = format!("/remote/client/sessions/{session_id}/{action}");
-        let request = match authenticated_request(
-            &client,
-            reqwest::Method::POST,
-            &path,
-            &credential,
-        ) {
-            Ok(request) => request,
-            Err(err) => {
-                log::warn!("Cashier remote session {action} was not sent: {err}");
-                return;
-            }
-        };
-        match request.send().await {
-            Ok(response) if response.status().is_success() => {}
-            Ok(response) => {
-                log::warn!(
-                    "Cashier remote session {action} returned {}",
-                    response.status()
-                );
-            }
-            Err(err) => {
-                log::warn!("Cashier remote session {action} failed: {err}");
-            }
+        if let Err(err) = send_session_status(session_id, action).await {
+            log::warn!("Cashier remote session {action} failed: {err}");
         }
     });
 }
