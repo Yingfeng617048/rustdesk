@@ -1671,7 +1671,9 @@ impl Connection {
         self.authorized = true;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(session_id) = self.cashier_remote_session_id {
-            crate::cashier_remote::report_connected(session_id);
+            if self.is_remote() {
+                crate::cashier_remote::report_connected(session_id);
+            }
         }
         let (conn_type, auth_conn_type) = if self.file_transfer.is_some() {
             (1, AuthConnType::FileTransfer)
@@ -2316,7 +2318,10 @@ impl Connection {
     fn validate_password(&mut self, allow_permanent_password: bool) -> bool {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(session_id) = self.cashier_remote_session_id {
-            if crate::cashier_remote::consume_access_key(session_id) {
+            if crate::cashier_remote::authorize_access_key(
+                session_id,
+                self.file_transfer.is_some(),
+            ) {
                 self.set_conn_audit_primary_auth(ConnAuditPrimaryAuth::TemporaryPassword);
                 return true;
             }
@@ -2709,9 +2714,10 @@ impl Connection {
                     && is_logon();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             let cashier_remote_session_id = if !has_login_union {
-                crate::cashier_remote::validate_access_key(|access_key| {
-                    self.validate_password_plain(access_key)
-                })
+                crate::cashier_remote::validate_access_key(
+                    self.file_transfer.is_some(),
+                    |access_key| self.validate_password_plain(access_key),
+                )
             } else {
                 None
             };
@@ -4905,7 +4911,10 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if self.authorized {
             if let Some(session_id) = self.cashier_remote_session_id.take() {
-                crate::cashier_remote::report_ended(session_id);
+                if self.is_remote() {
+                    crate::cashier_remote::clear_session(session_id);
+                    crate::cashier_remote::report_ended(session_id);
+                }
             }
         }
         // If voice A,B -> C, and A,B has voice call

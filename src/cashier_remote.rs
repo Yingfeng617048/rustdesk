@@ -30,6 +30,7 @@ struct ActiveSession {
     id: i32,
     access_key: String,
     expires_at: i64,
+    connected: bool,
 }
 
 lazy_static::lazy_static! {
@@ -95,6 +96,8 @@ struct ActiveSessionResponseItem {
     id: i32,
     access_key: String,
     expires_at: String,
+    #[serde(default)]
+    connected: bool,
 }
 
 fn api_base_url() -> Result<String, String> {
@@ -350,16 +353,23 @@ async fn poll_active_session(
             id: session.id,
             access_key: session.access_key,
             expires_at,
+            connected: session.connected,
         })
     });
     let mut active_session = ACTIVE_SESSION.lock().unwrap();
     let mut consumed_session_id = CONSUMED_SESSION_ID.lock().unwrap();
     match session {
-        Some(session) if *consumed_session_id == Some(session.id) => {
+        // A connected backend session may only be resumed by the same engine
+        // process that authenticated its primary remote-control connection.
+        Some(session)
+            if session.connected && *consumed_session_id != Some(session.id) =>
+        {
             active_session.take();
         }
         Some(session) => {
-            consumed_session_id.take();
+            if *consumed_session_id != Some(session.id) {
+                consumed_session_id.take();
+            }
             *active_session = Some(session);
         }
         None => {
@@ -425,7 +435,10 @@ pub async fn refresh_active_session() {
     let _ = poll_active_session(&client, &credential).await;
 }
 
-pub fn validate_access_key<F>(matches: F) -> Option<i32>
+pub fn validate_access_key<F>(
+    allow_connected_file_transfer: bool,
+    matches: F,
+) -> Option<i32>
 where
     F: FnOnce(&str) -> bool,
 {
@@ -433,23 +446,48 @@ where
     let Some(session) = active_session.as_ref() else {
         return None;
     };
-    if session.expires_at <= chrono::Utc::now().timestamp() {
+    if !session.connected && session.expires_at <= chrono::Utc::now().timestamp() {
         active_session.take();
         return None;
     }
-    matches(&session.access_key).then_some(session.id)
+    let consumed_session_id = *CONSUMED_SESSION_ID.lock().unwrap();
+    let scope_allowed = match consumed_session_id {
+        Some(consumed_id) => allow_connected_file_transfer && consumed_id == session.id,
+        None => !allow_connected_file_transfer,
+    };
+    (scope_allowed && matches(&session.access_key)).then_some(session.id)
 }
 
-pub fn consume_access_key(session_id: i32) -> bool {
-    let mut active_session = ACTIVE_SESSION.lock().unwrap();
-    let can_consume = active_session.as_ref().map_or(false, |session| {
-        session.id == session_id && session.expires_at > chrono::Utc::now().timestamp()
-    });
-    if can_consume {
-        *CONSUMED_SESSION_ID.lock().unwrap() = Some(session_id);
-        active_session.take();
+pub fn authorize_access_key(session_id: i32, is_file_transfer: bool) -> bool {
+    let active_session = ACTIVE_SESSION.lock().unwrap();
+    let Some(session) = active_session.as_ref() else {
+        return false;
+    };
+    if session.id != session_id
+        || (!session.connected && session.expires_at <= chrono::Utc::now().timestamp())
+    {
+        return false;
     }
-    can_consume
+    let mut consumed_session_id = CONSUMED_SESSION_ID.lock().unwrap();
+    match *consumed_session_id {
+        Some(consumed_id) => is_file_transfer && consumed_id == session_id,
+        None if !is_file_transfer => {
+            *consumed_session_id = Some(session_id);
+            true
+        }
+        None => false,
+    }
+}
+
+pub fn clear_session(session_id: i32) {
+    let mut active_session = ACTIVE_SESSION.lock().unwrap();
+    let mut consumed_session_id = CONSUMED_SESSION_ID.lock().unwrap();
+    if *consumed_session_id == Some(session_id) {
+        consumed_session_id.take();
+        if active_session.as_ref().map(|session| session.id) == Some(session_id) {
+            active_session.take();
+        }
+    }
 }
 
 fn report_session_status(session_id: i32, action: &'static str) {
@@ -505,28 +543,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn access_key_is_one_time_and_expires() {
+    fn access_key_only_allows_file_transfer_after_primary_connection() {
         *CONSUMED_SESSION_ID.lock().unwrap() = None;
         *ACTIVE_SESSION.lock().unwrap() = Some(ActiveSession {
             id: 7,
             access_key: "one-time-key".to_owned(),
             expires_at: chrono::Utc::now().timestamp() + 60,
+            connected: false,
         });
 
         assert_eq!(
-            validate_access_key(|value| value == "one-time-key"),
+            validate_access_key(false, |value| value == "one-time-key"),
             Some(7)
         );
-        assert!(consume_access_key(7));
-        assert!(!consume_access_key(7));
-        assert!(validate_access_key(|value| value == "one-time-key").is_none());
+        assert!(authorize_access_key(7, false));
+        assert!(!authorize_access_key(7, false));
+        assert_eq!(
+            validate_access_key(true, |value| value == "one-time-key"),
+            Some(7)
+        );
+        assert!(authorize_access_key(7, true));
+        assert!(authorize_access_key(7, true));
+
+        clear_session(7);
+        assert!(
+            validate_access_key(true, |value| value == "one-time-key").is_none()
+        );
 
         *ACTIVE_SESSION.lock().unwrap() = Some(ActiveSession {
             id: 8,
             access_key: "expired-key".to_owned(),
             expires_at: chrono::Utc::now().timestamp() - 1,
+            connected: false,
         });
-        assert!(validate_access_key(|value| value == "expired-key").is_none());
+        assert!(
+            validate_access_key(false, |value| value == "expired-key").is_none()
+        );
+
+        *CONSUMED_SESSION_ID.lock().unwrap() = Some(9);
+        *ACTIVE_SESSION.lock().unwrap() = Some(ActiveSession {
+            id: 9,
+            access_key: "connected-key".to_owned(),
+            expires_at: chrono::Utc::now().timestamp() - 60,
+            connected: true,
+        });
+
+        assert_eq!(
+            validate_access_key(true, |value| value == "connected-key"),
+            Some(9)
+        );
+        assert!(authorize_access_key(9, true));
+        assert!(!authorize_access_key(9, false));
+        clear_session(9);
         *CONSUMED_SESSION_ID.lock().unwrap() = None;
     }
 }
