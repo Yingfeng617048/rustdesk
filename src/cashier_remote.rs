@@ -14,6 +14,9 @@ const API_BASE_URL_OPTION: &str = "cashier-api-base-url";
 const DEVICE_ID_OPTION: &str = "cashier-device-id";
 const DEVICE_SECRET_OPTION: &str = "cashier-device-secret";
 const DEVICE_UUID_OPTION: &str = "cashier-device-uuid";
+const PAIRING_ID_OPTION: &str = "cashier-pairing-id";
+const PAIRING_SECRET_OPTION: &str = "cashier-pairing-secret";
+const PAIRING_DEVICE_SECRET_OPTION: &str = "cashier-pairing-device-secret";
 const SECRET_ENCRYPTION_VERSION: &str = "00";
 const SECRET_MAX_LEN: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
@@ -86,6 +89,68 @@ struct HeartbeatRequest {
     operating_system: String,
     client_version: String,
     engine_instance_id: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePairingRequest {
+    device_uuid: String,
+    rustdesk_id: String,
+    name: String,
+    hostname: String,
+    operating_system: String,
+    client_version: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatePairingResponse {
+    pairing: CreatedPairing,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedPairing {
+    id: i32,
+    pairing_secret: String,
+    device_secret: String,
+    binding_code: String,
+    bind_url: String,
+    expires_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingStatusResponse {
+    status: String,
+    device: Option<PairingBoundDevice>,
+    store: Option<PairingBoundStore>,
+    rustdesk_server: Option<RustdeskServer>,
+}
+
+#[derive(Deserialize)]
+struct PairingBoundDevice {
+    id: i32,
+    name: Option<String>,
+    #[serde(rename = "rustdeskId")]
+    rustdesk_id: String,
+}
+
+#[derive(Deserialize)]
+struct PairingBoundStore {
+    name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PairingDisplay {
+    status: String,
+    binding_code: Option<String>,
+    bind_url: Option<String>,
+    expires_at: Option<String>,
+    device_name: Option<String>,
+    store_name: Option<String>,
+    rustdesk_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -185,6 +250,169 @@ fn save_registration(
     }
     options.insert("key".to_owned(), server.public_key.clone());
     crate::ipc::set_options(options).map_err(|err| format!("无法保存设备登记信息：{err}"))
+}
+
+fn encrypt_pending_secret(value: &str) -> Result<String, String> {
+    let encrypted = encrypt_str_or_original(value, SECRET_ENCRYPTION_VERSION, SECRET_MAX_LEN);
+    if encrypted == value {
+        return Err("设备绑定凭证加密失败".to_owned());
+    }
+    Ok(encrypted)
+}
+
+fn decrypt_pending_secret(option: &str) -> Result<String, String> {
+    let encrypted = Config::get_option(option);
+    if encrypted.is_empty() {
+        return Err("本机没有等待确认的绑定申请".to_owned());
+    }
+    let (value, decrypted, _) = decrypt_str_or_original(&encrypted, SECRET_ENCRYPTION_VERSION);
+    if !decrypted || value.is_empty() {
+        return Err("无法读取本机绑定凭证，请重新生成二维码".to_owned());
+    }
+    Ok(value)
+}
+
+fn clear_pairing_options() -> Result<(), String> {
+    let mut options = crate::ipc::get_options();
+    options.remove(PAIRING_ID_OPTION);
+    options.remove(PAIRING_SECRET_OPTION);
+    options.remove(PAIRING_DEVICE_SECRET_OPTION);
+    crate::ipc::set_options(options).map_err(|err| format!("无法清理绑定申请：{err}"))
+}
+
+fn response_error(prefix: &str, response: reqwest::blocking::Response) -> String {
+    let status = response.status();
+    let detail = response
+        .json::<serde_json::Value>()
+        .ok()
+        .and_then(|json| json["message"].as_str().map(str::to_owned));
+    detail
+        .map(|message| format!("{prefix}：{message}"))
+        .unwrap_or_else(|| format!("{prefix}，后台返回状态码 {status}"))
+}
+
+pub fn create_pairing(qr_path: &str) -> Result<String, String> {
+    let rustdesk_id = Config::get_id();
+    if rustdesk_id.trim().len() < 6 {
+        return Err("远程引擎尚未取得设备 ID，请稍后重试".to_owned());
+    }
+
+    let request = CreatePairingRequest {
+        device_uuid: device_uuid(),
+        rustdesk_id,
+        name: hostname(),
+        hostname: hostname(),
+        operating_system: operating_system(),
+        client_version: crate::VERSION.to_owned(),
+    };
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("无法创建网络连接：{err}"))?;
+    let response = client
+        .post(format!("{}/remote/client/pairings", api_base_url()?))
+        .json(&request)
+        .send()
+        .map_err(|err| format!("无法连接管理后台：{err}"))?;
+    if !response.status().is_success() {
+        return Err(response_error("生成设备绑定码失败", response));
+    }
+    let response = response
+        .json::<CreatePairingResponse>()
+        .map_err(|err| format!("无法读取后台绑定结果：{err}"))?;
+
+    let encrypted_pairing_secret = encrypt_pending_secret(&response.pairing.pairing_secret)?;
+    let encrypted_device_secret = encrypt_pending_secret(&response.pairing.device_secret)?;
+    let mut options = crate::ipc::get_options();
+    options.insert(PAIRING_ID_OPTION.to_owned(), response.pairing.id.to_string());
+    options.insert(PAIRING_SECRET_OPTION.to_owned(), encrypted_pairing_secret);
+    options.insert(
+        PAIRING_DEVICE_SECRET_OPTION.to_owned(),
+        encrypted_device_secret,
+    );
+    crate::ipc::set_options(options)
+        .map_err(|err| format!("无法保存设备绑定申请：{err}"))?;
+
+    if !qr_path.trim().is_empty() {
+        let png = qrcode_generator::to_png_to_vec(
+            response.pairing.bind_url.as_bytes(),
+            qrcode_generator::QrCodeEcc::Medium,
+            240,
+        )
+        .map_err(|err| format!("二维码生成失败：{err}"))?;
+        std::fs::write(qr_path, png).map_err(|err| format!("二维码保存失败：{err}"))?;
+    }
+
+    serde_json::to_string(&PairingDisplay {
+        status: "pending".to_owned(),
+        binding_code: Some(response.pairing.binding_code),
+        bind_url: Some(response.pairing.bind_url),
+        expires_at: Some(response.pairing.expires_at),
+        device_name: None,
+        store_name: None,
+        rustdesk_id: None,
+    })
+    .map_err(|err| err.to_string())
+}
+
+pub fn pairing_status() -> Result<String, String> {
+    let pairing_id = Config::get_option(PAIRING_ID_OPTION)
+        .parse::<i32>()
+        .map_err(|_| "本机没有等待确认的绑定申请".to_owned())?;
+    let pairing_secret = decrypt_pending_secret(PAIRING_SECRET_OPTION)?;
+    let device_secret = decrypt_pending_secret(PAIRING_DEVICE_SECRET_OPTION)?;
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|err| format!("无法创建网络连接：{err}"))?;
+    let response = client
+        .get(format!(
+            "{}/remote/client/pairings/{pairing_id}/status",
+            api_base_url()?
+        ))
+        .header("x-pairing-secret", pairing_secret)
+        .send()
+        .map_err(|err| format!("无法连接管理后台：{err}"))?;
+    if !response.status().is_success() {
+        return Err(response_error("查询设备绑定状态失败", response));
+    }
+    let response = response
+        .json::<PairingStatusResponse>()
+        .map_err(|err| format!("无法读取设备绑定状态：{err}"))?;
+
+    if response.status == "bound" {
+        let device = response.device.ok_or_else(|| "后台缺少绑定设备信息".to_owned())?;
+        let server = response
+            .rustdesk_server
+            .ok_or_else(|| "后台缺少远程服务器配置".to_owned())?;
+        let encrypted = encrypt_pending_secret(&device_secret)?;
+        save_registration(device.id, encrypted, &server)?;
+        clear_pairing_options()?;
+        return serde_json::to_string(&PairingDisplay {
+            status: "bound".to_owned(),
+            binding_code: None,
+            bind_url: None,
+            expires_at: None,
+            device_name: device.name,
+            store_name: response.store.map(|store| store.name),
+            rustdesk_id: Some(device.rustdesk_id),
+        })
+        .map_err(|err| err.to_string());
+    }
+
+    if matches!(response.status.as_str(), "expired" | "cancelled") {
+        clear_pairing_options()?;
+    }
+    serde_json::to_string(&PairingDisplay {
+        status: response.status,
+        binding_code: None,
+        bind_url: None,
+        expires_at: None,
+        device_name: None,
+        store_name: None,
+        rustdesk_id: None,
+    })
+    .map_err(|err| err.to_string())
 }
 
 pub fn enroll(enrollment_token: &str, device_name: &str) -> Result<String, String> {

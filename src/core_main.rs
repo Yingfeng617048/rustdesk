@@ -395,6 +395,19 @@ pub fn core_main() -> Option<Vec<String>> {
                 Err(err) => eprintln!("{err}"),
             }
             return None;
+        } else if args[0] == "--cashier-create-pairing" {
+            let qr_path = args.get(1).map(|value| value.as_str()).unwrap_or("");
+            match crate::cashier_remote::create_pairing(qr_path) {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
+        } else if args[0] == "--cashier-pairing-status" {
+            match crate::cashier_remote::pairing_status() {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
         } else if args[0] == "--cashier-print-name" {
             match crate::cashier_remote::print_device_name() {
                 Ok(message) => println!("{message}"),
