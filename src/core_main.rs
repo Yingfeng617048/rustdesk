@@ -397,7 +397,11 @@ pub fn core_main() -> Option<Vec<String>> {
             return None;
         } else if args[0] == "--cashier-create-pairing" {
             let qr_path = args.get(1).map(|value| value.as_str()).unwrap_or("");
-            match crate::cashier_remote::create_pairing(qr_path) {
+            let rebind_code = args
+                .get(2)
+                .map(|value| value.as_str())
+                .unwrap_or("");
+            match crate::cashier_remote::create_pairing(qr_path, rebind_code) {
                 Ok(message) => println!("{message}"),
                 Err(err) => eprintln!("{err}"),
             }

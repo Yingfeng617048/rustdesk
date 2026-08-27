@@ -100,6 +100,7 @@ struct CreatePairingRequest {
     hostname: String,
     operating_system: String,
     client_version: String,
+    rebind_code: String,
 }
 
 #[derive(Deserialize)]
@@ -291,7 +292,7 @@ fn response_error(prefix: &str, response: reqwest::blocking::Response) -> String
         .unwrap_or_else(|| format!("{prefix}，后台返回状态码 {status}"))
 }
 
-pub fn create_pairing(qr_path: &str) -> Result<String, String> {
+pub fn create_pairing(qr_path: &str, rebind_code: &str) -> Result<String, String> {
     let rustdesk_id = Config::get_id();
     if rustdesk_id.trim().len() < 6 {
         return Err("远程引擎尚未取得设备 ID，请稍后重试".to_owned());
@@ -304,6 +305,7 @@ pub fn create_pairing(qr_path: &str) -> Result<String, String> {
         hostname: hostname(),
         operating_system: operating_system(),
         client_version: crate::VERSION.to_owned(),
+        rebind_code: rebind_code.trim().to_owned(),
     };
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
