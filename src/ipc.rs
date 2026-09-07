@@ -662,6 +662,7 @@ pub async fn new_listener(postfix: &str) -> ResultType<Incoming> {
 pub struct CheckIfRestart {
     stop_service: String,
     rendezvous_servers: Vec<String>,
+    key: String,
     audio_input: String,
     voice_call_input: String,
     ws: String,
@@ -675,6 +676,7 @@ impl CheckIfRestart {
         CheckIfRestart {
             stop_service: Config::get_option("stop-service"),
             rendezvous_servers: Config::get_rendezvous_servers(),
+            key: Config::get_option("key"),
             audio_input: Config::get_option("audio-input"),
             voice_call_input: Config::get_option("voice-call-input"),
             ws: Config::get_option(OPTION_ALLOW_WEBSOCKET),
@@ -696,6 +698,7 @@ impl Drop for CheckIfRestart {
         if allow_insecure_tls_fallback_changed
             || self.stop_service != Config::get_option("stop-service")
             || self.rendezvous_servers != Config::get_rendezvous_servers()
+            || self.key != Config::get_option("key")
             || self.ws != Config::get_option(OPTION_ALLOW_WEBSOCKET)
             || self.disable_udp != Config::get_option(config::keys::OPTION_DISABLE_UDP)
             || self.api_server != Config::get_option("api-server")

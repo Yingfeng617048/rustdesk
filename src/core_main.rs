@@ -412,6 +412,12 @@ pub fn core_main() -> Option<Vec<String>> {
                 Err(err) => eprintln!("{err}"),
             }
             return None;
+        } else if args[0] == "--cashier-sync-server-config" {
+            match crate::cashier_remote::sync_server_config() {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
         } else if args[0] == "--cashier-print-name" {
             match crate::cashier_remote::print_device_name() {
                 Ok(message) => println!("{message}"),

@@ -17,6 +17,11 @@ const DEVICE_UUID_OPTION: &str = "cashier-device-uuid";
 const PAIRING_ID_OPTION: &str = "cashier-pairing-id";
 const PAIRING_SECRET_OPTION: &str = "cashier-pairing-secret";
 const PAIRING_DEVICE_SECRET_OPTION: &str = "cashier-pairing-device-secret";
+// 必须与果次方助手和生产 hbbs/hbbr 配置保持一致。命令不接受外部地址参数，
+// 防止普通本地用户借同步接口把服务重定向到非授权服务器。
+const FIXED_ID_SERVER: &str = "162.14.109.182";
+const FIXED_RELAY_SERVER: &str = "162.14.109.182";
+const FIXED_PUBLIC_KEY: &str = "L1kuWKlf+T9Sqmnf+yBvxjrUOm9FvQ9iaxm2gVZX2m8=";
 const SECRET_ENCRYPTION_VERSION: &str = "00";
 const SECRET_MAX_LEN: usize = 128;
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
@@ -251,6 +256,21 @@ fn save_registration(
     }
     options.insert("key".to_owned(), server.public_key.clone());
     crate::ipc::set_options(options).map_err(|err| format!("无法保存设备登记信息：{err}"))
+}
+
+/// 将助手内置的私有服务器配置同步到当前 RustDesk 配置及已运行的服务。
+/// 这条命令用于修复升级/重装后残留的旧服务器地址或旧公钥。
+pub fn sync_server_config() -> Result<String, String> {
+    let mut options = crate::ipc::get_options();
+    options.insert(
+        "custom-rendezvous-server".to_owned(),
+        FIXED_ID_SERVER.to_owned(),
+    );
+    options.insert("relay-server".to_owned(), FIXED_RELAY_SERVER.to_owned());
+    options.insert("key".to_owned(), FIXED_PUBLIC_KEY.to_owned());
+    crate::ipc::set_options(options)
+        .map_err(|err| format!("无法同步远程服务器配置：{err}"))?;
+    Ok("远程服务器配置已同步".to_owned())
 }
 
 fn encrypt_pending_secret(value: &str) -> Result<String, String> {
