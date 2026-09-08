@@ -424,6 +424,12 @@ pub fn core_main() -> Option<Vec<String>> {
                 Err(err) => eprintln!("{err}"),
             }
             return None;
+        } else if args[0] == "--cashier-clear-registration" {
+            match crate::cashier_remote::clear_registration() {
+                Ok(message) => println!("{message}"),
+                Err(err) => eprintln!("{err}"),
+            }
+            return None;
         } else if args[0] == "--cashier-session-notice" {
             match crate::cashier_remote::print_session_notice() {
                 Ok(message) => println!("{message}"),

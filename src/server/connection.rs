@@ -2547,6 +2547,14 @@ impl Connection {
             }
         }
         if self.authorized {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if let Some(session_id) = self.cashier_remote_session_id {
+                if !crate::cashier_remote::is_session_active(session_id) {
+                    self.send_login_error("Remote session ended").await;
+                    self.on_close("Cashier remote session revoked", false).await;
+                    return false;
+                }
+            }
             if matches!(msg.union.as_ref(), Some(message::Union::LoginRequest(_))) {
                 return true;
             }
@@ -2713,7 +2721,7 @@ impl Connection {
                 crate::get_builtin_option(keys::OPTION_ALLOW_LOGON_SCREEN_PASSWORD) == "Y"
                     && is_logon();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            let cashier_remote_session_id = if !has_login_union {
+            let cashier_remote_session_id = if !has_login_union || self.file_transfer.is_some() {
                 crate::cashier_remote::validate_access_key(
                     self.file_transfer.is_some(),
                     |access_key| self.validate_password_plain(access_key),
@@ -2729,6 +2737,15 @@ impl Connection {
             let has_cashier_remote_session = cashier_remote_session_id.is_some();
             #[cfg(any(target_os = "android", target_os = "ios"))]
             let has_cashier_remote_session = false;
+
+            // 一旦设备已登记到果次方后台，只接受后台签发的一次性会话密钥。
+            // 禁止残留的 RustDesk 临时/永久密码绕过后台审批、审计和微信提醒。
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            if !has_cashier_remote_session && crate::cashier_remote::is_registered() {
+                self.send_login_error("Please start remote support from Guocifang Cloud")
+                    .await;
+                return true;
+            }
 
             if !has_cashier_remote_session
                 && ((password::approve_mode() == ApproveMode::Click

@@ -522,6 +522,14 @@ fn fix_cursor_mask(
 
 define_windows_service!(ffi_service_main, service_main);
 
+fn get_main_service_name() -> String {
+    if crate::cashier_remote::is_cashier_build() {
+        "gocifang".to_owned()
+    } else {
+        crate::get_app_name()
+    }
+}
+
 fn service_main(arguments: Vec<OsString>) {
     if let Err(e) = run_service(arguments) {
         log::error!("run_service failed: {}", e);
@@ -530,7 +538,7 @@ fn service_main(arguments: Vec<OsString>) {
 
 pub fn start_os_service() {
     if let Err(e) =
-        windows_service::service_dispatcher::start(crate::get_app_name(), ffi_service_main)
+        windows_service::service_dispatcher::start(get_main_service_name(), ffi_service_main)
     {
         log::error!("start_service failed: {}", e);
     }
@@ -651,7 +659,7 @@ async fn run_service(_arguments: Vec<OsString>) -> ResultType<()> {
     };
 
     // Register system service event handler
-    let status_handle = service_control_handler::register(crate::get_app_name(), event_handler)?;
+    let status_handle = service_control_handler::register(get_main_service_name(), event_handler)?;
 
     let next_status = ServiceStatus {
         // Should match the one from system service registry
@@ -1273,6 +1281,9 @@ pub fn lock_screen() {
 }
 
 const IS1: &str = "{54E86BC2-6C85-41F3-A9EB-1A94AC9B1F93}_is1";
+// 果次方安装器自己的 Inno Setup AppId。优先读取它，避免为了安装服务而
+// 改写电脑上可能存在的官方 RustDesk 卸载信息和 InstallLocation。
+const CASHIER_IS1: &str = "{8A2E0C4E-5B3F-4A71-9C2E-6D0F5A1B7C3D}_is1";
 
 fn get_subkey(name: &str, wow: bool) -> String {
     let tmp = format!(
@@ -1287,6 +1298,14 @@ fn get_subkey(name: &str, wow: bool) -> String {
 }
 
 fn get_valid_subkey() -> String {
+    let subkey = get_subkey(CASHIER_IS1, false);
+    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
+        return subkey;
+    }
+    let subkey = get_subkey(CASHIER_IS1, true);
+    if !get_reg_of(&subkey, "InstallLocation").is_empty() {
+        return subkey;
+    }
     let subkey = get_subkey(IS1, false);
     if !get_reg_of(&subkey, "InstallLocation").is_empty() {
         return subkey;
@@ -1770,25 +1789,32 @@ pub fn run_before_uninstall() -> ResultType<()> {
 
 fn get_before_uninstall(kill_self: bool) -> String {
     let app_name = crate::get_app_name();
+    let service_name = get_main_service_name();
     let ext = app_name.to_lowercase();
     let filter = if kill_self {
         "".to_string()
     } else {
         format!(" /FI \"PID ne {}\"", get_current_pid())
     };
+    let kill_app = if crate::cashier_remote::is_cashier_build() {
+        "".to_owned()
+    } else {
+        format!("taskkill /F /IM {}.exe{}", app_name, filter)
+    };
     format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop {service_name}
+    sc delete {service_name}
     taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    {kill_app}
     reg delete HKEY_CLASSES_ROOT\\.{ext} /f
     reg delete HKEY_CLASSES_ROOT\\{ext} /f
     reg delete HKEY_CLASSES_ROOT\\cashier-remote /f
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
         broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
+        kill_app = kill_app,
     )
 }
 
@@ -3172,18 +3198,25 @@ impl Drop for WakeLock {
 pub fn uninstall_service(show_new_window: bool, _: bool) -> bool {
     log::info!("Uninstalling service...");
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
+    let kill_app = if crate::cashier_remote::is_cashier_build() {
+        "".to_owned()
+    } else {
+        format!("taskkill /F /IM {}.exe{}", crate::get_app_name(), filter)
+    };
     Config::set_option("stop-service".into(), "Y".into());
     let cmds = format!(
         "
     chcp 65001
-    sc stop {app_name}
-    sc delete {app_name}
+    sc stop {service_name}
+    sc delete {service_name}
     if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\" del /f /q \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{app_name} Tray.lnk\"
     taskkill /F /IM {broker_exe}
-    taskkill /F /IM {app_name}.exe{filter}
+    {kill_app}
     ",
         app_name = crate::get_app_name(),
+        service_name = get_main_service_name(),
         broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
+        kill_app = kill_app,
     );
     if let Err(err) = run_cmds(cmds, false, "uninstall") {
         Config::set_option("stop-service".into(), "".into());
@@ -3199,16 +3232,21 @@ pub fn install_service() -> bool {
     let _installing = crate::platform::InstallingService::new();
     let (_, _, _, exe) = get_install_info();
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
+    let kill_app = if crate::cashier_remote::is_cashier_build() {
+        "".to_owned()
+    } else {
+        format!("taskkill /F /IM {}.exe{}", crate::get_app_name(), filter)
+    };
     Config::set_option("stop-service".into(), "".into());
     crate::ipc::EXIT_RECV_CLOSE.store(false, Ordering::Relaxed);
     let cmds = format!(
         "
 chcp 65001
-taskkill /F /IM {app_name}.exe{filter}
+{kill_app}
 {import_config}
 {create_service}
     ",
-        app_name = crate::get_app_name(),
+        kill_app = kill_app,
         import_config = get_import_config(&exe),
         create_service = get_create_service(&exe),
     );
@@ -3262,6 +3300,7 @@ fn get_directory_size_kb(path: &str) -> u64 {
 
 pub fn update_me(debug: bool) -> ResultType<()> {
     let app_name = crate::get_app_name();
+    let service_name = get_main_service_name();
     let src_exe = std::env::current_exe()?.to_string_lossy().to_string();
     let (subkey, path, _, exe) = get_install_info();
     let is_installed = std::fs::metadata(&exe).is_ok();
@@ -3372,8 +3411,13 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     };
 
     let filter = format!(" /FI \"PID ne {}\"", get_current_pid());
+    let kill_app = if crate::cashier_remote::is_cashier_build() {
+        "".to_owned()
+    } else {
+        format!("taskkill /F /IM {}.exe{}", app_name, filter)
+    };
     let restore_service_cmd = if is_service_running {
-        format!("sc start {}", &app_name)
+        format!("sc start {}", &service_name)
     } else {
         "".to_owned()
     };
@@ -3405,8 +3449,8 @@ reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
     let cmds = format!(
         "
 chcp 65001
-sc stop {app_name}
-taskkill /F /IM {app_name}.exe{filter}
+sc stop {service_name}
+{kill_app}
 {reg_cmd}
 {copy_exe}
 {rename_exe}
@@ -3417,6 +3461,8 @@ taskkill /F /IM {app_name}.exe{filter}
 {sleep}
     ",
         app_name = app_name,
+        service_name = service_name,
+        kill_app = kill_app,
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
         rename_exe = rename_exe_cmd(&src_exe, &path)?,
         remove_meta_toml = remove_meta_toml_cmd(is_msi.unwrap_or(true), &path),
@@ -3694,13 +3740,14 @@ fn get_import_config(exe: &str) -> String {
         return "".to_string();
     }
     format!("
-sc stop {app_name}
-sc delete {app_name}
-sc create {app_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
-sc stop {app_name}
-sc delete {app_name}
+sc stop {service_name}
+sc delete {service_name}
+sc create {service_name} binpath= \"\\\"{exe}\\\" --import-config \\\"{config_path}\\\"\" start= auto DisplayName= \"{app_name} Service\"
+sc start {service_name}
+sc stop {service_name}
+sc delete {service_name}
 ",
+    service_name = get_main_service_name(),
     app_name = crate::get_app_name(),
     config_path=Config::file().to_str().unwrap_or(""),
 )
@@ -3717,9 +3764,10 @@ if exist \"%PROGRAMDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup\\{ap
 ", app_name = crate::get_app_name())
     } else {
         format!("
-sc create {app_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
-sc start {app_name}
+sc create {service_name} binpath= \"\\\"{exe}\\\" --service\" start= auto DisplayName= \"{app_name} Service\"
+sc start {service_name}
 ",
+    service_name = get_main_service_name(),
     app_name = crate::get_app_name())
     }
 }
@@ -3929,7 +3977,7 @@ fn get_uninstall_amyuni_idd() -> String {
 
 #[inline]
 pub fn is_self_service_running() -> bool {
-    is_service_running(&crate::get_app_name())
+    is_service_running(&get_main_service_name())
 }
 
 pub fn is_service_running(service_name: &str) -> bool {

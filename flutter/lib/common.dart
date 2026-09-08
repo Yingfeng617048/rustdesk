@@ -51,7 +51,9 @@ final globalKey = GlobalKey<NavigatorState>();
 final navigationBarKey = GlobalKey();
 const _cashierRemoteScheme = 'cashier-remote';
 const _cashierApiBaseUrl = String.fromEnvironment('CASHIER_API_BASE_URL',
-    defaultValue: 'http://localhost:3000');
+    // 这是果次方专用发行分支：即使手工构建时漏传 dart-define，
+    // 也不能生成一个只会连接控制端本机 localhost 的正式安装包。
+    defaultValue: 'https://guocifang.cn/api');
 
 final isAndroid = isAndroid_;
 final isIOS = isIOS_;

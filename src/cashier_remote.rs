@@ -24,7 +24,7 @@ const FIXED_RELAY_SERVER: &str = "162.14.109.182";
 const FIXED_PUBLIC_KEY: &str = "L1kuWKlf+T9Sqmnf+yBvxjrUOm9FvQ9iaxm2gVZX2m8=";
 const SECRET_ENCRYPTION_VERSION: &str = "00";
 const SECRET_MAX_LEN: usize = 128;
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 const SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const SESSION_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
@@ -256,6 +256,23 @@ fn save_registration(
     }
     options.insert("key".to_owned(), server.public_key.clone());
     crate::ipc::set_options(options).map_err(|err| format!("无法保存设备登记信息：{err}"))
+}
+
+/// Clear only the backend-issued device credentials after the backend has
+/// authoritatively rejected them. Keep the stable device UUID so a later
+/// pairing still identifies this physical computer consistently.
+pub fn clear_registration() -> Result<String, String> {
+    let mut options = crate::ipc::get_options();
+    options.remove(DEVICE_ID_OPTION);
+    options.remove(DEVICE_SECRET_OPTION);
+    options.remove(PAIRING_ID_OPTION);
+    options.remove(PAIRING_SECRET_OPTION);
+    options.remove(PAIRING_DEVICE_SECRET_OPTION);
+    crate::ipc::set_options(options)
+        .map_err(|err| format!("无法清除设备登记信息：{err}"))?;
+    ACTIVE_SESSION.lock().unwrap().take();
+    CONSUMED_SESSION_ID.lock().unwrap().take();
+    Ok("设备登记信息已清除".to_owned())
 }
 
 /// 将助手内置的私有服务器配置同步到当前 RustDesk 配置及已运行的服务。
@@ -650,7 +667,15 @@ async fn poll_active_session(
     .await
     .map_err(|err| err.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("session poll returned {}", response.status()));
+        let status = response.status();
+        if matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            ACTIVE_SESSION.lock().unwrap().take();
+            CONSUMED_SESSION_ID.lock().unwrap().take();
+        }
+        return Err(format!("session poll returned {status}"));
     }
     let response = response
         .json::<ActiveSessionResponse>()
@@ -809,6 +834,16 @@ pub fn clear_session(session_id: i32) {
             active_session.take();
         }
     }
+}
+
+pub fn is_registered() -> bool {
+    credentials().is_some()
+}
+
+pub fn is_session_active(session_id: i32) -> bool {
+    ACTIVE_SESSION.lock().unwrap().as_ref().map(|session| session.id)
+        == Some(session_id)
+        && *CONSUMED_SESSION_ID.lock().unwrap() == Some(session_id)
 }
 
 async fn send_session_status(session_id: i32, action: &str) -> Result<(), String> {

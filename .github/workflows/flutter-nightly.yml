@@ -16,6 +16,10 @@ on:
     paths:
       - "src/cashier_remote.rs"
       - "src/core_main.rs"
+      - "src/server/connection.rs"
+      - "src/platform/windows.rs"
+      - "flutter/lib/common.dart"
+      - "build.py"
       - ".github/workflows/flutter-build.yml"
       - ".github/workflows/flutter-nightly.yml"
 
