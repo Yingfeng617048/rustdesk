@@ -188,7 +188,17 @@ jobs:
         run: |
           flutter doctor -v
           flutter precache --windows
-          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          $engineUrl = 'https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip'
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $engineUrl -OutFile windows-x64-release.zip
+              break
+            } catch {
+              if ($attempt -eq 3) { throw }
+              Write-Warning "Engine download failed (attempt $attempt/3); retrying in 10 seconds."
+              Start-Sleep -Seconds 10
+            }
+          }
           Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
           mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
 
