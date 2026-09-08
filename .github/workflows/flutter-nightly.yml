@@ -16,6 +16,7 @@ on:
     paths:
       - "src/cashier_remote.rs"
       - "src/core_main.rs"
+      - ".github/workflows/flutter-build.yml"
       - ".github/workflows/flutter-nightly.yml"
 
 jobs:
