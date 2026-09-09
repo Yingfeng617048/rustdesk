@@ -3460,7 +3460,6 @@ sc stop {service_name}
 {install_printer_cmd}
 {sleep}
     ",
-        app_name = app_name,
         service_name = service_name,
         kill_app = kill_app,
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
