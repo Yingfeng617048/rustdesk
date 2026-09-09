@@ -17,6 +17,9 @@ const DEVICE_UUID_OPTION: &str = "cashier-device-uuid";
 const PAIRING_ID_OPTION: &str = "cashier-pairing-id";
 const PAIRING_SECRET_OPTION: &str = "cashier-pairing-secret";
 const PAIRING_DEVICE_SECRET_OPTION: &str = "cashier-pairing-device-secret";
+const REBIND_AUTHORIZATION_OPTION: &str = "cashier-rebind-authorization";
+const REBIND_AUTHORIZATION_EXPIRES_AT_OPTION: &str =
+    "cashier-rebind-authorization-expires-at";
 // 必须与果次方助手和生产 hbbs/hbbr 配置保持一致。命令不接受外部地址参数，
 // 防止普通本地用户借同步接口把服务重定向到非授权服务器。
 const FIXED_ID_SERVER: &str = "162.14.109.182";
@@ -106,6 +109,7 @@ struct CreatePairingRequest {
     operating_system: String,
     client_version: String,
     rebind_code: String,
+    rebind_authorization: String,
 }
 
 #[derive(Deserialize)]
@@ -123,12 +127,15 @@ struct CreatedPairing {
     binding_code: String,
     bind_url: String,
     expires_at: String,
+    rebind_authorization: Option<String>,
+    rebind_authorization_expires_at: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PairingStatusResponse {
     status: String,
+    expires_at: Option<String>,
     device: Option<PairingBoundDevice>,
     store: Option<PairingBoundStore>,
     rustdesk_server: Option<RustdeskServer>,
@@ -157,6 +164,7 @@ struct PairingDisplay {
     device_name: Option<String>,
     store_name: Option<String>,
     rustdesk_id: Option<String>,
+    rebind_authorization_expires_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -268,6 +276,8 @@ pub fn clear_registration() -> Result<String, String> {
     options.remove(PAIRING_ID_OPTION);
     options.remove(PAIRING_SECRET_OPTION);
     options.remove(PAIRING_DEVICE_SECRET_OPTION);
+    options.remove(REBIND_AUTHORIZATION_OPTION);
+    options.remove(REBIND_AUTHORIZATION_EXPIRES_AT_OPTION);
     crate::ipc::set_options(options)
         .map_err(|err| format!("无法清除设备登记信息：{err}"))?;
     ACTIVE_SESSION.lock().unwrap().take();
@@ -310,6 +320,21 @@ fn decrypt_pending_secret(option: &str) -> Result<String, String> {
     Ok(value)
 }
 
+fn decrypt_optional_secret(option: &str) -> String {
+    let encrypted = Config::get_option(option);
+    if encrypted.is_empty() {
+        return String::new();
+    }
+    let (value, decrypted, _) =
+        decrypt_str_or_original(&encrypted, SECRET_ENCRYPTION_VERSION);
+    if decrypted {
+        value
+    } else {
+        log::error!("Failed to decrypt optional cashier authorization");
+        String::new()
+    }
+}
+
 fn clear_pairing_options() -> Result<(), String> {
     let mut options = crate::ipc::get_options();
     options.remove(PAIRING_ID_OPTION);
@@ -335,6 +360,11 @@ pub fn create_pairing(qr_path: &str, rebind_code: &str) -> Result<String, String
         return Err("远程引擎尚未取得设备 ID，请稍后重试".to_owned());
     }
 
+    let rebind_authorization = if rebind_code.trim().is_empty() {
+        decrypt_optional_secret(REBIND_AUTHORIZATION_OPTION)
+    } else {
+        String::new()
+    };
     let request = CreatePairingRequest {
         device_uuid: device_uuid(),
         rustdesk_id,
@@ -343,6 +373,7 @@ pub fn create_pairing(qr_path: &str, rebind_code: &str) -> Result<String, String
         operating_system: operating_system(),
         client_version: crate::VERSION.to_owned(),
         rebind_code: rebind_code.trim().to_owned(),
+        rebind_authorization,
     };
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
@@ -369,6 +400,22 @@ pub fn create_pairing(qr_path: &str, rebind_code: &str) -> Result<String, String
         PAIRING_DEVICE_SECRET_OPTION.to_owned(),
         encrypted_device_secret,
     );
+    if let Some(authorization) = response.pairing.rebind_authorization.as_deref() {
+        options.insert(
+            REBIND_AUTHORIZATION_OPTION.to_owned(),
+            encrypt_pending_secret(authorization)?,
+        );
+    }
+    if let Some(expires_at) = response
+        .pairing
+        .rebind_authorization_expires_at
+        .as_deref()
+    {
+        options.insert(
+            REBIND_AUTHORIZATION_EXPIRES_AT_OPTION.to_owned(),
+            expires_at.to_owned(),
+        );
+    }
     crate::ipc::set_options(options)
         .map_err(|err| format!("无法保存设备绑定申请：{err}"))?;
 
@@ -390,6 +437,9 @@ pub fn create_pairing(qr_path: &str, rebind_code: &str) -> Result<String, String
         device_name: None,
         store_name: None,
         rustdesk_id: None,
+        rebind_authorization_expires_at: response
+            .pairing
+            .rebind_authorization_expires_at,
     })
     .map_err(|err| err.to_string())
 }
@@ -426,6 +476,11 @@ pub fn pairing_status() -> Result<String, String> {
             .ok_or_else(|| "后台缺少远程服务器配置".to_owned())?;
         let encrypted = encrypt_pending_secret(&device_secret)?;
         save_registration(device.id, encrypted, &server)?;
+        let mut options = crate::ipc::get_options();
+        options.remove(REBIND_AUTHORIZATION_OPTION);
+        options.remove(REBIND_AUTHORIZATION_EXPIRES_AT_OPTION);
+        crate::ipc::set_options(options)
+            .map_err(|err| format!("无法清理换绑授权：{err}"))?;
         clear_pairing_options()?;
         return serde_json::to_string(&PairingDisplay {
             status: "bound".to_owned(),
@@ -435,6 +490,7 @@ pub fn pairing_status() -> Result<String, String> {
             device_name: device.name,
             store_name: response.store.map(|store| store.name),
             rustdesk_id: Some(device.rustdesk_id),
+            rebind_authorization_expires_at: None,
         })
         .map_err(|err| err.to_string());
     }
@@ -446,10 +502,14 @@ pub fn pairing_status() -> Result<String, String> {
         status: response.status,
         binding_code: None,
         bind_url: None,
-        expires_at: None,
+        expires_at: response.expires_at,
         device_name: None,
         store_name: None,
         rustdesk_id: None,
+        rebind_authorization_expires_at: {
+            let value = Config::get_option(REBIND_AUTHORIZATION_EXPIRES_AT_OPTION);
+            if value.is_empty() { None } else { Some(value) }
+        },
     })
     .map_err(|err| err.to_string())
 }
